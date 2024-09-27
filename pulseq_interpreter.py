@@ -20,36 +20,74 @@ class pulseq_interpreter(PSAssembler):
     def log(str):
         print(str)
     
-    # Overwrite assemble function
-    def assemble(self, pulseq_file, byte_format=True):
+    # Overwrite some assemble function
+    # _read_shapes function in PSassembler is not available for both uncompressed and compressed shape. 
+    def _read_shapes(self, f):
         """
-        Assemble Marcos machine code from PulSeq .seq file (PulSeq version 1.4.2)
+        Read SHAPES (rastered shapes) section in PulSeq file f to object dict memory.
+        Shapes are formatted with two header lines, followed by lines of single data points in compressed pulseq shape format
 
         Args:
-            pulseq_file (str): PulSeq file to assemble from
-            byte_format (bool): Default True -- Return transmit and gradient data in bytes, rather than numpy.ndarray
-        
+            f (_io.TextIOWrapper): File pointer to read from
+
         Returns:
-            tuple: Transmit data (bytes or numpy.ndarray); list of gradient data (list) (bytes or numpy.ndarray);
-                 command bytes (bytes); dictionary of final outputs (dict)
+            str: Raw next line in file after section ends
         """
-        self._logger.info(f'Assembling ' + pulseq_file)
-        if self.is_assembled:
-            self._logger.info('Overwriting old sequence...')
-        
-        self._read_pulseq(pulseq_file)
-        self._compile_tx_data()
-        # self._compile_grad_data()
-        # self._compile_instructions()
-        # self.is_assembled = True
-        # output_dict = {'readout_number' : self.readout_number, 'tx_t' : self._tx_t, 'rx_t' : self._rx_t}
-        # for key, value in self._definitions.items():
-        #     output_dict[key] = value
-        # if byte_format:
-        #     return (self.tx_bytes, self.grad_bytes, self.command_bytes, output_dict)
-        # else:
-        #     return (self.tx_arr, self.grad_arr, self.command_bytes, output_dict)
-        
- 
+        rline = ''
+        line = ''
+        self._logger.info('Shapes: Reading...')
+        while True:
+            line = f.readline()
+            rline = self._simplify(line)
+            if line == '' or rline in self._pulseq_keys: break
+            if len(rline.split()) == 2 and rline.split()[0].lower() == 'shape_id':
+                shape_id = int(rline.split()[1])
+                n = int(self._simplify(f.readline()).split()[1])
+                self._warning_if(shape_id in self._shapes, f'Repeat shape ID {shape_id}, overwriting')
+                self._shapes[shape_id] = np.zeros(n)
+
+                x_temp=[]
+                while True:
+                    new_line=self._simplify(f.readline())
+                    if new_line == '':
+                        break
+                    else:
+                        x_temp.append(float(new_line))
+                if(len(x_temp)==n):
+                    self._shapes[shape_id] = np.array(x_temp)
+                elif(len(x_temp)<n):
+                    i = 0
+                    prev = -2
+                    x = 0
+                    line_idx=0
+                    while i < n:
+                        dx = x_temp[line_idx]
+                        line_idx = line_idx + 1
+                        x += dx
+                        self._warning_if(x > 1 or x < 0, f'Shape {shape_id} entry {i} is {x}, outside of [0, 1], rounding')
+                        if x > 1:
+                            x = 1
+                        elif x < 0:
+                            x = 0
+                        self._shapes[shape_id][i] = x
+                        if dx == prev:
+                            r = int(x_temp[line_idx])
+                            line_idx=line_idx+1
+                            for _ in range(0, r):
+                                i += 1
+                                x += dx
+                                self._warning_if(x > 1 or x < 0, f'Shape {shape_id} entry {i} is {x}, outside of [0, 1], rounding')
+                                if x > 1:
+                                    x = 1
+                                elif x < 0:
+                                    x = 0
+                                self._shapes[shape_id][i] = x
+                        i += 1
+                        prev = dx
+
+        self._logger.info('Shapes: Complete')
+
+        return rline
+    
 tse_2_seq = pulseq_interpreter()
-tse_2_seq.assemble("./test_files/test_loopback.seq")
+tse_2_seq.assemble("./test_files/demo_tse_2.seq")
